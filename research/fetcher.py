@@ -1,14 +1,16 @@
+import time
 import requests
 import xml.etree.ElementTree as ET
+from datetime import date, timedelta
 
 
 def fetch_arxiv_papers(max_results: int = 15) -> list[dict]:
-    """Fetch latest papers from arxiv in NLP/Speech categories."""
+    """Latest papers from arxiv: cs.CL, cs.SD, eess.AS."""
     query = "cat:cs.CL+OR+cat:cs.SD+OR+cat:eess.AS"
     url = (
-        f"http://export.arxiv.org/api/query"
+        "http://export.arxiv.org/api/query"
         f"?search_query={query}"
-        f"&sortBy=submittedDate&sortOrder=descending"
+        "&sortBy=submittedDate&sortOrder=descending"
         f"&max_results={max_results}"
     )
     try:
@@ -40,13 +42,13 @@ def fetch_arxiv_papers(max_results: int = 15) -> list[dict]:
 
 
 def fetch_huggingface_trending(limit: int = 12) -> list[dict]:
-    """Fetch trending speech/NLP models from HuggingFace Hub."""
+    """Trending speech/NLP models from HuggingFace Hub."""
     results = []
-    for filter_tag in ("speech", "text-generation", "automatic-speech-recognition"):
+    for tag in ("speech", "text-generation", "automatic-speech-recognition"):
         try:
             response = requests.get(
                 "https://huggingface.co/api/models",
-                params={"sort": "trending", "limit": limit // 2, "filter": filter_tag},
+                params={"sort": "trending", "limit": limit // 2, "filter": tag},
                 timeout=10,
             )
             for m in response.json():
@@ -58,10 +60,8 @@ def fetch_huggingface_trending(limit: int = 12) -> list[dict]:
                     "pipeline_tag": m.get("pipeline_tag"),
                 })
         except Exception as e:
-            print(f"[fetcher] HuggingFace ({filter_tag}) error: {e}")
-    # deduplicate by id
-    seen = set()
-    unique = []
+            print(f"[fetcher] HuggingFace ({tag}) error: {e}")
+    seen, unique = set(), []
     for m in results:
         if m["id"] not in seen:
             seen.add(m["id"])
@@ -69,8 +69,105 @@ def fetch_huggingface_trending(limit: int = 12) -> list[dict]:
     return unique[:limit]
 
 
+def fetch_papers_with_code(limit: int = 10) -> list[dict]:
+    """Trending NLP/Speech papers from Papers With Code (sorted by GitHub implementations)."""
+    try:
+        response = requests.get(
+            "https://paperswithcode.com/api/v1/papers/",
+            params={
+                "q": "speech language model NLP ASR TTS",
+                "ordering": "-github_link_count",
+                "page_size": limit,
+            },
+            timeout=12,
+        )
+        response.raise_for_status()
+        data = response.json()
+        results = []
+        for p in data.get("results", []):
+            results.append({
+                "title": p.get("title", ""),
+                "abstract": (p.get("abstract") or "")[:350],
+                "github_implementations": p.get("github_link_count", 0),
+                "total_stars": p.get("total_stars", 0),
+                "published": (p.get("published") or "")[:10],
+                "url": p.get("url_abs", ""),
+            })
+        return results
+    except Exception as e:
+        print(f"[fetcher] Papers With Code error: {e}")
+        return []
+
+
+def fetch_hackernews(limit: int = 10) -> list[dict]:
+    """Recent HN stories about Speech/NLP/AI from the last 7 days, sorted by points."""
+    week_ago = int(time.time()) - 7 * 24 * 3600
+    try:
+        response = requests.get(
+            "https://hn.algolia.com/api/v1/search",
+            params={
+                "query": "speech recognition NLP voice AI language model",
+                "tags": "story",
+                "hitsPerPage": limit,
+                "numericFilters": f"created_at_i>{week_ago}",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        hits = response.json().get("hits", [])
+        results = [
+            {
+                "title": h.get("title"),
+                "url": h.get("url"),
+                "points": h.get("points", 0),
+                "comments": h.get("num_comments", 0),
+                "author": h.get("author"),
+            }
+            for h in hits
+        ]
+        return sorted(results, key=lambda x: x["points"], reverse=True)
+    except Exception as e:
+        print(f"[fetcher] HackerNews error: {e}")
+        return []
+
+
+def fetch_github_trending(limit: int = 10) -> list[dict]:
+    """Trending GitHub repos in NLP/Speech created in the last 14 days."""
+    since = (date.today() - timedelta(days=14)).isoformat()
+    queries = [
+        f"topic:speech-recognition created:>{since}",
+        f"topic:text-to-speech created:>{since}",
+        f"topic:nlp created:>{since} language:python",
+        f"topic:asr created:>{since}",
+    ]
+    seen, results = set(), []
+    for q in queries:
+        try:
+            response = requests.get(
+                "https://api.github.com/search/repositories",
+                params={"q": q, "sort": "stars", "order": "desc", "per_page": limit // 2},
+                headers={"Accept": "application/vnd.github.v3+json"},
+                timeout=10,
+            )
+            for repo in response.json().get("items", []):
+                name = repo.get("full_name")
+                if name not in seen:
+                    seen.add(name)
+                    results.append({
+                        "name": name,
+                        "description": (repo.get("description") or "")[:200],
+                        "stars": repo.get("stargazers_count", 0),
+                        "topics": repo.get("topics", [])[:6],
+                        "url": repo.get("html_url"),
+                        "language": repo.get("language"),
+                    })
+        except Exception as e:
+            print(f"[fetcher] GitHub trending error ({q[:30]}): {e}")
+    return sorted(results, key=lambda x: x["stars"], reverse=True)[:limit]
+
+
 def fetch_web_news(api_key: str, limit: int = 10) -> list[dict]:
-    """Fetch recent Speech/NLP/AI product news via Tavily."""
+    """Recent Speech/NLP/AI product news via Tavily."""
     if not api_key:
         return []
     try:

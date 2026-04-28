@@ -4,11 +4,28 @@ from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 
-from research.fetcher import fetch_arxiv_papers, fetch_huggingface_trending, fetch_web_news
+from research.fetcher import (
+    fetch_arxiv_papers,
+    fetch_huggingface_trending,
+    fetch_papers_with_code,
+    fetch_hackernews,
+    fetch_github_trending,
+    fetch_web_news,
+)
 from research.analyzer import analyze_research
 import anthropic
 
 logger = logging.getLogger(__name__)
+
+SOURCES_INFO = (
+    "📡 *Источники данных:*\n"
+    "• arxiv (cs.CL, cs.SD, eess.AS)\n"
+    "• HuggingFace Trending\n"
+    "• Papers With Code (топ по GitHub-имплементациям)\n"
+    "• Hacker News (топ за 7 дней)\n"
+    "• GitHub Trending (новые репо за 14 дней)\n"
+    "• Tavily Web Search (если настроен)\n"
+)
 
 
 class ResearchBot:
@@ -45,17 +62,17 @@ class ResearchBot:
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "*Speech/NLP Research Bot*\n\n"
-            "Источники данных:\n"
-            "• arxiv (cs.CL, cs.SD, eess.AS) — новые статьи\n"
-            "• HuggingFace Trending — трендовые модели\n"
-            "• Tavily Web Search — новости (если настроен)\n\n"
-            "Анализ делает Claude, дайджест на русском.\n\n"
+            + SOURCES_INFO
+            + "\nАнализ делает Claude, дайджест на русском.\n\n"
             "/research — запустить вручную",
             parse_mode=ParseMode.MARKDOWN,
         )
 
     async def cmd_research(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        msg = await update.message.reply_text("🔄 Собираю данные и анализирую, подождите ~30 сек...")
+        msg = await update.message.reply_text(
+            "🔄 Собираю данные из 6 источников, анализирую через Claude...\n"
+            "Обычно занимает 30–60 секунд."
+        )
         try:
             digest = await self._run_research()
             await self._send_digest(digest, update.effective_chat.id)
@@ -66,19 +83,34 @@ class ResearchBot:
 
     async def _run_research(self) -> str:
         loop = asyncio.get_event_loop()
-        papers, hf_models = await asyncio.gather(
+
+        # Fetch all sources concurrently
+        (
+            papers,
+            hf_models,
+            pwc_papers,
+            hn_stories,
+            github_repos,
+        ) = await asyncio.gather(
             loop.run_in_executor(None, fetch_arxiv_papers, 15),
             loop.run_in_executor(None, fetch_huggingface_trending, 12),
+            loop.run_in_executor(None, fetch_papers_with_code, 10),
+            loop.run_in_executor(None, fetch_hackernews, 10),
+            loop.run_in_executor(None, fetch_github_trending, 10),
         )
-        if self.tavily_key:
-            news = await loop.run_in_executor(None, fetch_web_news, self.tavily_key, 10)
-        else:
-            news = []
 
-        digest = await loop.run_in_executor(
-            None, analyze_research, papers, hf_models, news, self.anthropic_client
+        news = (
+            await loop.run_in_executor(None, fetch_web_news, self.tavily_key, 10)
+            if self.tavily_key
+            else []
         )
-        return digest
+
+        return await loop.run_in_executor(
+            None,
+            analyze_research,
+            papers, hf_models, pwc_papers, hn_stories, github_repos, news,
+            self.anthropic_client,
+        )
 
     async def send_scheduled_digest(self):
         """Called by the scheduler for the daily digest."""
@@ -90,8 +122,7 @@ class ResearchBot:
 
     async def _send_digest(self, text: str, chat_id: str | int):
         bot = Bot(token=self.token)
-        # Telegram message limit is 4096 chars
-        chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
+        chunks = [text[i: i + 4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             await bot.send_message(
                 chat_id=chat_id,
