@@ -1,7 +1,7 @@
 import logging
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
 from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 from telegram.constants import ParseMode
 
 from research.fetcher import (
@@ -14,7 +14,7 @@ from research.fetcher import (
 )
 from research.analyzer import analyze_research
 import anthropic
-import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,15 @@ SOURCES_INFO = (
     "📡 *Источники данных:*\n"
     "• arxiv (cs.CL, cs.SD, eess.AS)\n"
     "• HuggingFace Trending\n"
-    "• Papers With Code (топ по GitHub-имплементациям)\n"
+    "• Papers With Code\n"
     "• Hacker News (топ за 7 дней)\n"
     "• GitHub Trending (новые репо за 14 дней)\n"
     "• Tavily Web Search (если настроен)\n"
 )
+
+ASK_SYSTEM_PROMPT = """Ты — эксперт по Speech/NLP индустрии, советник продакт-менеджера.
+Отвечай конкретно и практично, без воды. Упоминай названия моделей/компаний когда уместно.
+Формат ответа: короткий Markdown, совместимый с Telegram. Отвечай на языке пользователя."""
 
 
 class ResearchBot:
@@ -72,14 +76,16 @@ class ResearchBot:
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("research", self.cmd_research))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
+        self.app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.cmd_ask)
+        )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "👋 *Speech/NLP Research Bot* запущен!\n\n"
-            "Каждый день в заданное время я буду присылать дайджест "
-            "о новинках Speech и NLP индустрии — с продуктовым взглядом.\n\n"
+            "Просто напиши любой вопрос о Speech/NLP индустрии — отвечу.\n\n"
             "Команды:\n"
-            "/research — исследование прямо сейчас\n"
+            "/research — полный дайджест из 6 источников\n"
             "/help — справка",
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -88,14 +94,37 @@ class ResearchBot:
         await update.message.reply_text(
             "*Speech/NLP Research Bot*\n\n"
             + SOURCES_INFO
-            + "\nАнализ делает Claude, дайджест на русском.\n\n"
-            "/research — запустить вручную",
+            + "\nАнализ делает Claude.\n\n"
+            "Можно просто написать вопрос текстом — отвечу.\n"
+            "/research — полный дайджест",
             parse_mode=ParseMode.MARKDOWN,
         )
 
+    async def cmd_ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        question = update.message.text
+        msg = await update.message.reply_text("🤔 Думаю...")
+        try:
+            loop = asyncio.get_event_loop()
+            answer = await loop.run_in_executor(
+                None, self._ask_claude, question
+            )
+            await msg.edit_text(answer, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            logger.error(f"Ask failed: {e}")
+            await msg.edit_text(f"❌ Ошибка: {e}")
+
+    def _ask_claude(self, question: str) -> str:
+        response = self.anthropic_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            system=ASK_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": question}],
+        )
+        return response.content[0].text
+
     async def cmd_research(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(
-            "🔄 Собиႈаю данные из 6 источников, анализиႈую через Claude...\n"
+            "🔄 Собиႈаю данные из 6 источников, анализиႈую чеႈез Claude...\n"
             "Обычно занимает 30–60 секунд."
         )
         try:
