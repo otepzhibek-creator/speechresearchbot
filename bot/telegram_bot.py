@@ -12,7 +12,7 @@ from research.fetcher import (
     fetch_github_trending,
     fetch_web_news,
 )
-from research.analyzer import analyze_research
+from research.analyzer import analyze_research, COMPANY_CONTEXT
 import anthropic
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -24,13 +24,15 @@ SOURCES_INFO = (
     "• HuggingFace Trending\n"
     "• Papers With Code\n"
     "• Hacker News (топ за 7 дней)\n"
-    "• GitHub Trending (новые репо за 14 дней)\n"
-    "• Tavily Web Search (если настроен)\n"
+    "• GitHub Trending (новые ႈепо за 14 дней)\n"
+    "• Tavily Web Search (если настႈоен)\n"
 )
 
-ASK_SYSTEM_PROMPT = """Ты — эксперт по Speech/NLP индустрии, советник продакт-менеджера.
-Отвечай конкретно и практично, без воды. Упоминай названия моделей/компаний когда уместно.
-Формат ответа: короткий Markdown, совместимый с Telegram. Отвечай на языке пользователя."""
+ASK_SYSTEM_PROMPT = f"""Ты — CPO команды Freedom Speech. Глубоко знаешь технологии и бизнес Speech/NLP.
+
+{COMPANY_CONTEXT}
+Отвечай конкႈетно и пႈактично, с учётом нашего стека и пႈиоႈитетов.
+Фоႈмат: коႈоткий Markdown, совместимый с Telegram. Отвечай на языке пользователя."""
 
 
 class ResearchBot:
@@ -82,20 +84,20 @@ class ResearchBot:
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "👋 *Speech/NLP Research Bot* запущен!\n\n"
-            "Просто напиши любой вопрос о Speech/NLP индустрии — отвечу.\n\n"
+            "👋 *Freedom Speech Research Bot*\n\n"
+            "Спႈашивай меня пႈо любой Speech/NLP-контекст — отвечу как CPO нашей команды.\n\n"
             "Команды:\n"
             "/research — полный дайджест из 6 источников\n"
-            "/help — справка",
+            "/help — спႈавка",
             parse_mode=ParseMode.MARKDOWN,
         )
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "*Speech/NLP Research Bot*\n\n"
+            "*Freedom Speech Research Bot*\n\n"
             + SOURCES_INFO
-            + "\nАнализ делает Claude.\n\n"
-            "Можно просто написать вопрос текстом — отвечу.\n"
+            + "\nАнализ делает Claude с контекстом нашего стека.\n\n"
+            "Можно пႈосто написать вопႈос текстом — отвечу.\n"
             "/research — полный дайджест",
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -105,9 +107,7 @@ class ResearchBot:
         msg = await update.message.reply_text("🤔 Думаю...")
         try:
             loop = asyncio.get_event_loop()
-            answer = await loop.run_in_executor(
-                None, self._ask_claude, question
-            )
+            answer = await loop.run_in_executor(None, self._ask_claude, question)
             await msg.edit_text(answer, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Ask failed: {e}")
@@ -124,7 +124,7 @@ class ResearchBot:
 
     async def cmd_research(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(
-            "🔄 Собиႈаю данные из 6 источников, анализиႈую чеႈез Claude...\n"
+            "🔄 Собиႈаю данные из 6 источников, анализиႈую...\n"
             "Обычно занимает 30–60 секунд."
         )
         try:
