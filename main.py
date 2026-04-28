@@ -1,5 +1,4 @@
 import logging
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.telegram_bot import ResearchBot
 from config import (
     ANTHROPIC_API_KEY,
@@ -31,22 +30,9 @@ def main():
         token=TELEGRAM_BOT_TOKEN,
         chat_id=TELEGRAM_CHAT_ID,
         anthropic_key=ANTHROPIC_API_KEY,
+        schedule_hour=RESEARCH_SCHEDULE_HOUR,
+        schedule_minute=RESEARCH_SCHEDULE_MINUTE,
         tavily_key=TAVILY_API_KEY,
-    )
-
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        bot.send_scheduled_digest,
-        "cron",
-        hour=RESEARCH_SCHEDULE_HOUR,
-        minute=RESEARCH_SCHEDULE_MINUTE,
-        id="daily_digest",
-    )
-    scheduler.start()
-
-    print(
-        f"Bot started. Daily digest scheduled at "
-        f"{RESEARCH_SCHEDULE_HOUR:02d}:{RESEARCH_SCHEDULE_MINUTE:02d} UTC"
     )
     bot.run()
 

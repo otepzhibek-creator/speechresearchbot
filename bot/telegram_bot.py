@@ -1,5 +1,5 @@
-import asyncio
 import logging
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -14,6 +14,7 @@ from research.fetcher import (
 )
 from research.analyzer import analyze_research
 import anthropic
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,38 @@ class ResearchBot:
         token: str,
         chat_id: str,
         anthropic_key: str,
+        schedule_hour: int = 9,
+        schedule_minute: int = 0,
         tavily_key: str | None = None,
     ):
         self.token = token
         self.chat_id = chat_id
         self.anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
         self.tavily_key = tavily_key
-        self.app = Application.builder().token(token).build()
+        self.schedule_hour = schedule_hour
+        self.schedule_minute = schedule_minute
+        self.scheduler = AsyncIOScheduler()
+        self.app = (
+            Application.builder()
+            .token(token)
+            .post_init(self._post_init)
+            .build()
+        )
         self._setup_handlers()
+
+    async def _post_init(self, application: Application):
+        self.scheduler.add_job(
+            self.send_scheduled_digest,
+            "cron",
+            hour=self.schedule_hour,
+            minute=self.schedule_minute,
+            id="daily_digest",
+        )
+        self.scheduler.start()
+        logger.info(
+            f"Scheduler started. Daily digest at "
+            f"{self.schedule_hour:02d}:{self.schedule_minute:02d} UTC"
+        )
 
     def _setup_handlers(self):
         self.app.add_handler(CommandHandler("start", self.cmd_start))
@@ -70,7 +95,7 @@ class ResearchBot:
 
     async def cmd_research(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(
-            "🔄 Собираю данные из 6 источников, анализирую через Claude...\n"
+            "🔄 Собиႈаю данные из 6 источников, анализиႈую через Claude...\n"
             "Обычно занимает 30–60 секунд."
         )
         try:
@@ -83,8 +108,6 @@ class ResearchBot:
 
     async def _run_research(self) -> str:
         loop = asyncio.get_event_loop()
-
-        # Fetch all sources concurrently
         (
             papers,
             hf_models,
@@ -98,13 +121,11 @@ class ResearchBot:
             loop.run_in_executor(None, fetch_hackernews, 10),
             loop.run_in_executor(None, fetch_github_trending, 10),
         )
-
         news = (
             await loop.run_in_executor(None, fetch_web_news, self.tavily_key, 10)
             if self.tavily_key
             else []
         )
-
         return await loop.run_in_executor(
             None,
             analyze_research,
@@ -113,7 +134,6 @@ class ResearchBot:
         )
 
     async def send_scheduled_digest(self):
-        """Called by the scheduler for the daily digest."""
         try:
             digest = await self._run_research()
             await self._send_digest(digest, self.chat_id)
@@ -131,4 +151,8 @@ class ResearchBot:
             )
 
     def run(self):
+        print(
+            f"Bot started. Daily digest at "
+            f"{self.schedule_hour:02d}:{self.schedule_minute:02d} UTC"
+        )
         self.app.run_polling()
